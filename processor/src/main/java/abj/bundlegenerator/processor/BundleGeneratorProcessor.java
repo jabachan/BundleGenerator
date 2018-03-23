@@ -57,7 +57,8 @@ public class BundleGeneratorProcessor extends AbstractProcessor {
             List<UseBundleMethod> useMethods = new ArrayList<>();
 
             // method for create Bundle
-            final MethodSpec methodBundle = createMethodBundle(element, packageName, classSimpleName, useMethods);
+            final MethodSpec methodBundle = createMethodBundle(element);
+            final MethodSpec methodBundleOverride = createMethodBundle(element, useMethods);
 
             // create wrapper class
             final TypeSpec innerBundleWrapperClass = createInnerWrapperClass(useMethods);
@@ -68,6 +69,7 @@ public class BundleGeneratorProcessor extends AbstractProcessor {
             final TypeSpec typeSpec = TypeSpec.classBuilder(classSimpleName + "BundleGenerator")
                     .addModifiers(Modifier.PUBLIC)
                     .addMethod(methodBundle)
+                    .addMethod(methodBundleOverride)
                     .addMethod(methodRestore)
                     .addType(innerBundleWrapperClass)
                     .build();
@@ -118,13 +120,28 @@ public class BundleGeneratorProcessor extends AbstractProcessor {
         BUNDLE_METHOD_DECLARED.put("java.util.ArrayList<java.lang.Integer>", "IntegerArrayList");
     }
 
+    private MethodSpec createMethodBundle(TypeElement classElement) {
+        final CodeBlock codeBlock = CodeBlock.builder()
+                .addStatement("final Bundle bundle = new Bundle()")
+                .addStatement("return bundle(target, bundle)")
+                .build();
+
+        return MethodSpec.methodBuilder("bundle")
+                .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
+                .addAnnotation(classNameNonNull())
+                .returns(classNameBundle())
+                .addParameter(
+                        ParameterSpec.builder(ClassName.get(classElement), "target")
+                                .addAnnotation(classNameNonNull())
+                                .build())
+                .addCode(codeBlock)
+                .build();
+    }
+
     private MethodSpec createMethodBundle(TypeElement classElement,
-                                          String packageName,
-                                          String classSimpleName,
                                           List<UseBundleMethod> useMethods) {
 
-        final CodeBlock.Builder builder = CodeBlock.builder()
-                .addStatement("final Bundle bundle = new Bundle()");
+        final CodeBlock.Builder builder = CodeBlock.builder();
 
         for (Element element : classElement.getEnclosedElements()) {
             if (element.getAnnotation(BundleSet.class) == null
@@ -135,6 +152,7 @@ public class BundleGeneratorProcessor extends AbstractProcessor {
 
             final ExecutableElement methodElement = (ExecutableElement) element;
             final String methodName = methodElement.getSimpleName().toString();
+            final String bundleKey = classElement.getQualifiedName().toString() + "_" + methodName;
             final TypeMirror returnType = methodElement.getReturnType();
 
             String bundleMethod = null;
@@ -147,19 +165,19 @@ public class BundleGeneratorProcessor extends AbstractProcessor {
                 returnTypeName = TypeName.get(returnType);
             }
             if (bundleMethod != null) {
-                builder.addStatement(bundlePutStatement(bundleMethod, classSimpleName, methodName));
+                builder.addStatement(bundlePutStatement(bundleMethod, bundleKey, methodName));
 
                 // save for restore
                 useMethods.add(
                         new UseBundleMethod(
                                 methodName,
                                 bundleMethod,
-                                classSimpleName + "_" + methodName,
+                                bundleKey,
                                 returnTypeName)
                 );
             } else {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
-                        "This method can't read: " + classSimpleName + "#" + methodName);
+                        "This method can't read: " + classElement.getSimpleName().toString() + "#" + methodName);
             }
 
         }
@@ -171,7 +189,11 @@ public class BundleGeneratorProcessor extends AbstractProcessor {
                 .addAnnotation(classNameNonNull())
                 .returns(classNameBundle())
                 .addParameter(
-                        ParameterSpec.builder(ClassName.get(packageName, classSimpleName), "target")
+                        ParameterSpec.builder(ClassName.get(classElement), "target")
+                                .addAnnotation(classNameNonNull())
+                                .build())
+                .addParameter(
+                        ParameterSpec.builder(classNameBundle(), "bundle")
                                 .addAnnotation(classNameNonNull())
                                 .build())
                 .addCode(codeBlock)
@@ -182,13 +204,11 @@ public class BundleGeneratorProcessor extends AbstractProcessor {
     /**
      * ex) bundle.putInt("Sample_getId", sample.getId())
      */
-    private static String bundlePutStatement(String bundleMethod, String className, String methodName) {
+    private static String bundlePutStatement(String bundleMethod, String key, String methodName) {
         return "bundle.put" +
                 bundleMethod +
                 "(\"" +
-                className +
-                "_" +
-                methodName +
+                key +
                 "\", target." +
                 methodName +
                 "())";
